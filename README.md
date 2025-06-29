@@ -2,6 +2,8 @@
 
 A web-based tool for annotating, reviewing, and managing AI-generated chatbot responses. Built with FastAPI and SQLite, it provides a modern UI for human-in-the-loop evaluation, error code tagging, and persistent storage of annotations. The tool is suitable for research, dataset curation, and quality assurance of conversational AI systems.
 
+![AI Chatbot Annotation Tool Screenshot](docs/imgs/Screenshot%202025-06-29%20at%2011.38.17.png)
+
 ---
 
 ## Features
