@@ -1,0 +1,425 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Annotation Tool</title>
+    <link
+      rel="stylesheet"
+      href="https://unpkg.com/@picocss/pico@2.0.6/css/pico.min.css"
+    />
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    <script>
+      let chatData = [];
+      let currentPaginationIndex = 0;
+
+      function renderChatElement(idx) {
+        const chatContainer = document.getElementById("chatContainer");
+        chatContainer.innerHTML = "";
+        if (!chatData.length) return;
+        const item = chatData[idx];
+        if (item.query) {
+          const userMsg = document.createElement("div");
+          userMsg.className = "user-msg";
+          userMsg.textContent = item.query;
+          chatContainer.appendChild(userMsg);
+        }
+        if (item.response) {
+          const botMsg = document.createElement("div");
+          botMsg.className = "bot-msg";
+          // Render markdown as HTML using marked.js
+          botMsg.innerHTML = marked.parse(item.response);
+          chatContainer.appendChild(botMsg);
+        }
+        if (item.feedback) {
+          document.querySelector(".annotation-box textarea").value =
+            item.feedback || "";
+        } else {
+          document.querySelector(".annotation-box textarea").value = "";
+        }
+
+        if (item.pass && item.pass !== null) {
+          document.querySelector("#prevStatus").textContent =
+            "Last Eval: " + item.pass;
+        } else {
+          document.querySelector("#prevStatus").textContent =
+            "Status: No previous evaluation";
+        }
+
+        document.querySelector("#error_code").value = item.error_code || ""; // Set error code if available
+
+        updateAnnotationFormVisibility();
+      }
+
+      function updatePagination() {
+        document.getElementById("pageIndicator").textContent =
+          chatData.length > 0
+            ? `${currentPaginationIndex + 1} of ${chatData.length}`
+            : "No data";
+        document.getElementById("prevBtn").disabled =
+          currentPaginationIndex === 0;
+        document.getElementById("nextBtn").disabled =
+          chatData.length === 0 ||
+          currentPaginationIndex === chatData.length - 1;
+      }
+
+      function updateAnnotationFormVisibility() {
+        const annotationForm = document.getElementById("annotation-form");
+        const deleteBtn = document.getElementById("delete-annotations-btn");
+        const downloadBtn = document.querySelector("#download-annotations-btn");
+        if (chatData.length > 0) {
+          annotationForm.style.display = "flex";
+          if (deleteBtn) deleteBtn.disabled = false;
+          if (downloadBtn) downloadBtn.disabled = false;
+        } else {
+          annotationForm.style.display = "none";
+          if (deleteBtn) deleteBtn.disabled = true;
+          if (downloadBtn) downloadBtn.disabled = true;
+        }
+      }
+
+      document.addEventListener("DOMContentLoaded", function () {
+        // Hide annotation form initially
+        document.getElementById("annotation-form").style.display = "none";
+
+        // Fetch stored annotations from the backend
+        fetch("/annotations")
+          .then((res) => res.json())
+          .then((data) => {
+            if (
+              Array.isArray(data.annotations) &&
+              data.annotations.length > 0
+            ) {
+              chatData = data.annotations;
+              currentPaginationIndex = 0;
+              console.log("Loaded annotations:", chatData);
+              renderChatElement(currentPaginationIndex);
+              updatePagination();
+            } else {
+              updateAnnotationFormVisibility();
+            }
+          })
+          .catch(() => {});
+
+        // Upload annotation JSON file handler
+        document
+          .getElementById("jsonUpload")
+          .addEventListener("change", async function (e) {
+            const file = e.target.files[0];
+            if (!file) return;
+            const reader = new FileReader();
+            reader.onload = async function (evt) {
+              try {
+                const jsonData = JSON.parse(evt.target.result);
+
+                if (!Array.isArray(jsonData)) {
+                  alert("Invalid JSON format. Expected an array.");
+                  return;
+                }
+
+                // First, delete all old annotations
+                try {
+                  const res = await fetch("/annotations", { method: "DELETE" });
+                  if (!res.ok) throw new Error("Delete failed");
+                  console.log("Old annotations deleted.");
+                } catch (err) {
+                  alert("Delete failed.");
+                  console.error("Delete error:", err);
+                  return;
+                }
+
+                console.log("Uploading JSON data:", jsonData.length);
+
+                // Then, upload the new annotations
+                await fetch("/upload-json", {
+                  method: "POST",
+                  headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify({ data: jsonData }),
+                })
+                  .then((res) => {
+                    if (!res.ok) throw new Error("Upload failed");
+                    return res.json();
+                  })
+                  .then((result) => {
+                    console.log("Upload result:", result);
+                    alert(
+                      result.status === "ok"
+                        ? "Upload successful!"
+                        : "Upload failed."
+                    );
+                    // Load the uploaded data for annotation
+                    if (Array.isArray(jsonData) && jsonData.length > 0) {
+                      chatData = jsonData;
+                      currentPaginationIndex = 0;
+                      renderChatElement(currentPaginationIndex);
+                      updatePagination();
+                    } else {
+                      updateAnnotationFormVisibility();
+                    }
+                  })
+                  .catch((err) => {
+                    alert("Upload failed.");
+                    console.error("Upload error:", err);
+                    return;
+                  });
+              } catch (err) {
+                alert("Invalid JSON file.");
+                console.error("Error parsing JSON:", err);
+                return;
+              }
+            };
+            reader.readAsText(file);
+          });
+
+        document
+          .getElementById("prevBtn")
+          .addEventListener("click", function () {
+            if (currentPaginationIndex > 0) {
+              currentPaginationIndex--;
+              renderChatElement(currentPaginationIndex);
+              updatePagination();
+            }
+          });
+        document
+          .getElementById("nextBtn")
+          .addEventListener("click", function () {
+            if (currentPaginationIndex < chatData.length - 1) {
+              currentPaginationIndex++;
+              renderChatElement(currentPaginationIndex);
+              updatePagination();
+            }
+          });
+
+        document
+          .querySelector("#fail")
+          .addEventListener("click", () => saveAnnotation("fail"));
+        document
+          .querySelector("#pass")
+          .addEventListener("click", () => saveAnnotation("pass"));
+
+        function saveAnnotation(evaluation = "fail") {
+          const annotation = document.querySelector(
+            ".annotation-box textarea"
+          ).value;
+
+          if (chatData.length > 0) {
+            chatData[currentPaginationIndex].feedback = annotation;
+            chatData[currentPaginationIndex].pass = evaluation;
+            chatData[currentPaginationIndex].error_code =
+              document.querySelector("#error_code").value;
+          }
+
+          console.log(
+            `Saving annotation for element ${currentPaginationIndex + 1}:`,
+            chatData[currentPaginationIndex]
+          );
+
+          fetch("/save-annotation", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              annotation: chatData[currentPaginationIndex],
+            }),
+          })
+            .then((res) => res.json())
+            .then((data) => {
+              if (currentPaginationIndex < chatData.length - 1) {
+                currentPaginationIndex++;
+                renderChatElement(currentPaginationIndex);
+                updatePagination();
+              }
+            })
+            .catch((err) => {
+              console.error("Failed to save annotation:", err);
+              alert("Failed to save annotation.");
+            });
+        }
+
+        document
+          .getElementById("delete-annotations-btn")
+          .addEventListener("click", function () {
+            if (!confirm("Are you sure you want to delete all annotations?"))
+              return;
+            fetch("/annotations", { method: "DELETE" })
+              .then((res) => res.json())
+              .then(() => {
+                chatData = [];
+                currentPaginationIndex = 0;
+                renderChatElement(currentPaginationIndex);
+                updatePagination();
+                updateAnnotationFormVisibility();
+                alert("All annotations deleted.");
+                window.location.reload();
+              })
+              .catch(() => alert("Failed to delete annotations."));
+          });
+      });
+    </script>
+    <style>
+      :root {
+        --pico-primary: #152a58;
+      }
+      .flex-row {
+        display: flex;
+        gap: 2rem;
+      }
+      .chat-box {
+        flex: 1;
+        background: #181a1b;
+        color: #f1f1f1;
+        border-radius: 8px;
+        padding: 1rem;
+        min-height: 400px;
+      }
+      .annotation-box {
+        flex: 1;
+        display: flex;
+        flex-direction: column;
+      }
+      @media (min-width: 900px) {
+        .chat-box {
+          flex: 2;
+        }
+        .annotation-box {
+          flex: 1;
+          position: sticky;
+          top: 50%;
+          transform: translateY(-50%);
+          align-self: flex-start;
+          max-height: 80vh;
+        }
+      }
+      .user-msg {
+        background: #737986;
+        color: #fff;
+        padding: 0.75rem;
+        border-radius: 12px;
+        margin-bottom: 0.5rem;
+        max-width: 80%;
+        align-self: flex-start;
+        border: 1px solid #737986;
+      }
+      .bot-msg {
+        background: #23272b;
+        color: #f1f1f1;
+        padding: 0.75rem;
+        border-radius: 12px;
+        margin-bottom: 1.5rem;
+        max-width: 80%;
+        align-self: flex-end;
+        border: 1px solid #333;
+        margin-left: auto;
+      }
+
+      .bot-msg > * {
+        color: #f1f1f1;
+      }
+
+      textarea {
+        width: 100%;
+        min-height: 120px;
+        margin-top: 1rem;
+      }
+      button {
+        margin-top: 0.5rem;
+        background-color: #152a58 !important;
+        border-color: #152a58 !important;
+        min-width: 120px;
+      }
+      button:hover {
+        background-color: #1c3a7d !important;
+        border-color: #1c3a7d !important;
+      }
+      button#fail {
+        background-color: #8d3330 !important;
+        border-color: #8d3330 !important;
+      }
+      button#fail:hover {
+        background-color: #a33a37 !important;
+        border-color: #a33a37 !important;
+      }
+      button#pass {
+        background-color: #397c39 !important;
+        border-color: #397c39 !important;
+      }
+      button#pass:hover {
+        background-color: #4a8a4a !important;
+        border-color: #4a8a4a !important;
+      }
+      #chatContainer > div {
+        display: flex;
+        flex-direction: column;
+        margin-top: 1rem;
+      }
+      .container-fluid {
+        padding: 2vh 4vw;
+        max-width: 2100px;
+      }
+      #annotation-form {
+        margin-top: 2rem;
+      }
+      #pageIndicator {
+        margin: auto;
+      }
+      form#uploadForm {
+        max-width: 50vw;
+      }
+      form#uploadForm > fieldset {
+        align-items: center;
+      }
+      form#uploadForm > fieldset > input {
+        margin-bottom: 0;
+      }
+    </style>
+  </head>
+  <body>
+    <main class="container-fluid">
+      <div class="grid">
+        <div>
+          <form class="grid" id="uploadForm">
+            <fieldset class="grid">
+              <label for="jsonUpload">Upload a JSON file:</label>
+              <input type="file" id="jsonUpload" accept="application/json" />
+            </fieldset>
+          </form>
+        </div>
+        <div class="grid">
+          <button id="delete-annotations-btn" disabled>
+            Delete all annotations
+          </button>
+          <button id="download-annotations-btn" disabled>
+            Download annotations
+          </button>
+        </div>
+      </div>
+      <hr />
+      <div id="annotation-form" class="flex-row">
+        <div class="chat-box" id="chatContainer"></div>
+        <div class="annotation-box">
+          <div class="grid">
+            <button id="prevBtn" type="button">Prev</button>
+            <span id="pageIndicator">No data</span>
+            <button id="nextBtn" type="button">Next</button>
+          </div>
+          <textarea
+            placeholder="Enter your annotation here..."
+            rows="5"
+          ></textarea>
+          <div class="grid">
+            <button id="fail" type="button">Fail</button>
+            <button id="pass" type="button">Pass</button>
+          </div>
+          <hr />
+          <div>
+            <textarea
+              id="error_code"
+              placeholder="Enter your error codes here..."
+              rows="2"
+            ></textarea>
+            <small id="prevStatus" class="text-muted"></small>
+          </div>
+        </div>
+      </div>
+    </main>
+  </body>
+</html>
